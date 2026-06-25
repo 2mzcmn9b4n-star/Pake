@@ -1,0 +1,96 @@
+name: Build Discord App with Pake CLI
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.26.2"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Discord App
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Setup Node.js Environment
+        uses: ./.github/actions/setup-env
+        with:
+          mode: build
+
+      - name: Build CLI
+        run: pnpm run cli:build
+
+      - name: Rust cache restore
+        uses: actions/cache/restore@v4.2.0
+        id: cache_store
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-pake-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Download Vencord Browser Extension
+        shell: pwsh
+        run: |
+          $vencordUrl = "https://raw.githubusercontent.com/Vencord/builds/main/Vencord.user.js"
+          $outputPath = "vencord-injection.js"
+          try {
+            Invoke-WebRequest -Uri $vencordUrl -OutFile $outputPath -ErrorAction Stop
+            Write-Host "✓ Vencord script downloaded successfully to $outputPath"
+          } catch {
+            Write-Host "Failed to download Vencord, continuing without it..."
+          }
+
+      - name: Build Discord App
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          $args = @(
+            "https://discord.com/channels/@me",
+            "--name", "Discord",
+            "--targets", "x64",
+            "--keep-binary",
+            "--show-system-tray",
+            "--new-window",
+            "--force-internal-navigation",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "--inject", "vencord-injection.js"
+          )
+
+          Write-Host "Running: node dist/cli.js $($args -join ' ')"
+          node dist/cli.js @args
+
+          git checkout -- src-tauri/Cargo.lock
+
+      - name: Upload MSI (Windows)
+        uses: actions/upload-artifact@v6
+        with:
+          name: Discord-Windows-Vencord
+          path: Discord.msi
+          retention-days: 3
+
+      - name: Rust cache store
+        uses: actions/cache/save@v4.2.0
+        if: steps.cache_store.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-pake-${{ hashFiles('**/Cargo.lock') }}

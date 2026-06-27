@@ -148,55 +148,21 @@ jobs:
           Write-Host "Running: pake $($args -join ' ')"
           pake @args
 
-      - name: Find and organize artifacts (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $msiFiles = Get-ChildItem -Path "." -Filter "Discord-Vencord*.msi" -ErrorAction SilentlyContinue
-          if ($msiFiles.Count -gt 0) {
-            foreach ($file in $msiFiles) {
-              Write-Host "Found MSI: $($file.Name)"
-              Copy-Item -Path $file.FullName -Destination "Discord-Vencord.msi" -Force
-            }
-          } else {
-            Write-Host "No MSI file found in current directory"
-            Get-ChildItem -Path "." -Recurse -Filter "*.msi" | ForEach-Object { Write-Host "Found: $($_.FullName)" }
-          }
-
-      - name: Find and organize artifacts (Linux)
-        if: runner.os == 'Linux'
+      - name: List build artifacts
+        if: always()
         shell: bash
         run: |
-          echo "Looking for build artifacts..."
-          find . -name "Discord-Vencord*" -type f | head -20
-          
-          # Try to find deb file
-          if [ -f "Discord-Vencord*.deb" ]; then
-            echo "DEB file found"
-          fi
-          
-          # Try to find AppImage file
-          if [ -f "Discord-Vencord*.AppImage" ]; then
-            echo "AppImage file found"
-          fi
-
-      - name: Find and organize artifacts (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          echo "Looking for build artifacts..."
-          find . -name "Discord-Vencord*" -type f | head -20
-          
-          if [ -f "Discord-Vencord.dmg" ]; then
-            echo "DMG file found"
-          fi
+          echo "========== Build Artifacts =========="
+          ls -lah | grep -i "discord\|\.msi\|\.dmg\|\.deb\|\.appimage\|\.rpm"
+          echo "====================================="
+          find . -maxdepth 2 -type f \( -name "*.msi" -o -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" \) 2>/dev/null | head -20
 
       - name: Upload DMG (macOS)
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: Discord-Vencord-macOS
-          path: Discord-Vencord.dmg
+          path: "Discord-Vencord*.dmg"
           retention-days: 30
           if-no-files-found: warn
 
@@ -205,7 +171,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Discord-Vencord-Linux-deb
-          path: Discord-Vencord*.deb
+          path: "Discord-Vencord*.deb"
           retention-days: 30
           if-no-files-found: warn
 
@@ -214,7 +180,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Discord-Vencord-Linux-AppImage
-          path: Discord-Vencord*.AppImage
+          path: "Discord-Vencord*.AppImage"
           retention-days: 30
           if-no-files-found: warn
 
@@ -223,7 +189,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Discord-Vencord-Linux-rpm
-          path: Discord-Vencord*.rpm
+          path: "Discord-Vencord*.rpm"
           retention-days: 30
           if-no-files-found: warn
 
@@ -232,7 +198,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Discord-Vencord-Windows-x64
-          path: Discord-Vencord.msi
+          path: "Discord-Vencord*.msi"
           retention-days: 30
           if-no-files-found: warn
 

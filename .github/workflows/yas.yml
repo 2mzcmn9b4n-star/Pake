@@ -1,0 +1,307 @@
+name: Build Discord with Vencord
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.26.2"
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform"
+        required: true
+        default: "windows-latest"
+        type: choice
+        options:
+          - "windows-latest"
+          - "macos-latest"
+          - "ubuntu-24.04"
+      inject_vencord:
+        description: "Inject Vencord mods"
+        required: false
+        type: boolean
+        default: true
+      width:
+        description: "Window width (px)"
+        required: false
+        default: "1400"
+      height:
+        description: "Window height (px)"
+        required: false
+        default: "900"
+      app_version:
+        description: "App version"
+        required: false
+        default: "1.0.0"
+      targets:
+        description: "Package formats for Linux (comma-separated: deb,appimage,rpm,zst)"
+        required: false
+        default: "deb"
+
+jobs:
+  build:
+    name: Discord-Vencord-${{ inputs.platform }}
+    runs-on: ${{ inputs.platform }}
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install pake-cli globally
+        run: pnpm install -g pake-cli
+
+      - name: Setup mold linker
+        if: runner.os == 'Linux'
+        uses: rui314/setup-mold@v1
+
+      - name: Create Vencord inject script
+        if: inputs.inject_vencord == true
+        shell: bash
+        run: |
+          cat > vencord-inject.js << 'EOF'
+          // Load Vencord userscript into Discord web
+          (async function() {
+            try {
+              // Fetch Vencord userscript from builds repo
+              const response = await fetch('https://raw.githubusercontent.com/2mzcmn9b4n-star/builds/main/Vencord.user.js');
+              const vencordScript = await response.text();
+              
+              // Create script element
+              const script = document.createElement('script');
+              script.textContent = vencordScript;
+              script.type = 'text/javascript';
+              
+              // Inject into page
+              (document.head || document.documentElement).appendChild(script);
+              
+              console.log('✅ Vencord injected successfully!');
+            } catch (error) {
+              console.error('❌ Failed to inject Vencord:', error);
+            }
+          })();
+          EOF
+
+      - name: Build Discord-Vencord (Linux/macOS)
+        if: runner.os != 'Windows'
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          ARGS=("https://discord.com" "--name" "Discord-Vencord")
+          
+          ARGS+=("--width" "${{ inputs.width }}")
+          ARGS+=("--height" "${{ inputs.height }}")
+          ARGS+=("--app-version" "${{ inputs.app_version }}")
+          ARGS+=("--force-internal-navigation")
+          ARGS+=("--enable-drag-drop")
+          ARGS+=("--multi-window")
+          ARGS+=("--new-window")
+          
+          if [ "${{ inputs.inject_vencord }}" == "true" ]; then
+            ARGS+=("--inject" "./vencord-inject.js")
+          fi
+          
+          if [ -n "${{ inputs.targets }}" ] && [ "${{ runner.os }}" == "Linux" ]; then
+            ARGS+=("--targets" "${{ inputs.targets }}")
+          fi
+          
+          echo "Running: pake ${ARGS[@]}"
+          pake "${ARGS[@]}"
+
+      - name: Build Discord-Vencord (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          $args = @("https://discord.com", "--name", "Discord-Vencord")
+          
+          $args += "--width", "${{ inputs.width }}"
+          $args += "--height", "${{ inputs.height }}"
+          $args += "--app-version", "${{ inputs.app_version }}"
+          $args += "--force-internal-navigation"
+          $args += "--enable-drag-drop"
+          $args += "--multi-window"
+          $args += "--new-window"
+          
+          if ("${{ inputs.inject_vencord }}" -eq "true") {
+            $args += "--inject", "./vencord-inject.js"
+          }
+          
+          $args += "--targets", "x64"
+          
+          Write-Host "Running: pake $($args -join ' ')"
+          pake @args
+
+      - name: Find and organize artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msiFiles = Get-ChildItem -Path "." -Filter "Discord-Vencord*.msi" -ErrorAction SilentlyContinue
+          if ($msiFiles.Count -gt 0) {
+            foreach ($file in $msiFiles) {
+              Write-Host "Found MSI: $($file.Name)"
+              Copy-Item -Path $file.FullName -Destination "Discord-Vencord.msi" -Force
+            }
+          } else {
+            Write-Host "No MSI file found in current directory"
+            Get-ChildItem -Path "." -Recurse -Filter "*.msi" | ForEach-Object { Write-Host "Found: $($_.FullName)" }
+          }
+
+      - name: Find and organize artifacts (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo "Looking for build artifacts..."
+          find . -name "Discord-Vencord*" -type f | head -20
+          
+          # Try to find deb file
+          if [ -f "Discord-Vencord*.deb" ]; then
+            echo "DEB file found"
+          fi
+          
+          # Try to find AppImage file
+          if [ -f "Discord-Vencord*.AppImage" ]; then
+            echo "AppImage file found"
+          fi
+
+      - name: Find and organize artifacts (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "Looking for build artifacts..."
+          find . -name "Discord-Vencord*" -type f | head -20
+          
+          if [ -f "Discord-Vencord.dmg" ]; then
+            echo "DMG file found"
+          fi
+
+      - name: Upload DMG (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Discord-Vencord-macOS
+          path: Discord-Vencord.dmg
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload DEB (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Discord-Vencord-Linux-deb
+          path: Discord-Vencord*.deb
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload AppImage (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Discord-Vencord-Linux-AppImage
+          path: Discord-Vencord*.AppImage
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload RPM (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Discord-Vencord-Linux-rpm
+          path: Discord-Vencord*.rpm
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload MSI (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Discord-Vencord-Windows-x64
+          path: Discord-Vencord.msi
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Create Release
+        if: success()
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: discord-vencord-${{ github.run_number }}-${{ runner.os }}
+          release_name: Discord-Vencord Build ${{ github.run_number }} (${{ runner.os }})
+          body: |
+            ## Discord Desktop App with Vencord
+            
+            **Platform**: ${{ runner.os }}
+            **Build #**: ${{ github.run_number }}
+            **Timestamp**: ${{ github.event.head_commit.timestamp }}
+            
+            ### Features
+            - ✅ Full Discord web client
+            - ✅ Vencord plugins & customizations (injected)
+            - ✅ Window size: ${{ inputs.width }}x${{ inputs.height }}
+            - ✅ Drag & drop support
+            - ✅ Multi-window support
+            - ✅ Internal navigation (no external browser)
+            - ✅ Force internal link navigation
+            
+            ### Download
+            - Check artifacts section or this release for your platform
+            
+            ### Installation
+            
+            **Windows (.msi)**:
+            1. Download the MSI file
+            2. Run the installer
+            3. Launch Discord-Vencord
+            4. Enjoy Vencord mods!
+            
+            **macOS (.dmg)**:
+            1. Download the DMG file
+            2. Open and drag Discord-Vencord to Applications
+            3. Launch from Applications
+            4. Enjoy Vencord mods!
+            
+            **Linux (.deb/.AppImage/.rpm)**:
+            1. Download the appropriate package for your distro
+            2. Install: `sudo apt install Discord-Vencord.deb` (or equivalent)
+            3. Launch Discord-Vencord
+            4. Enjoy Vencord mods!
+            
+            ### Notes
+            - Vencord is loaded automatically on startup
+            - All Vencord plugins are available
+            - Themes and customizations work seamlessly
+            
+            **⚠️ Disclaimer**: Using Vencord violates Discord's Terms of Service. Use at your own risk.
+          draft: false
+          prerelease: false
+
+      - name: Build Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "Build Summary"
+          echo "=========================================="
+          echo "Platform: ${{ inputs.platform }}"
+          echo "App Name: Discord-Vencord"
+          echo "Window Size: ${{ inputs.width }}x${{ inputs.height }}"
+          echo "Vencord Injected: ${{ inputs.inject_vencord }}"
+          echo "App Version: ${{ inputs.app_version }}"
+          echo "Build Status: ${{ job.status }}"
+          echo "=========================================="
